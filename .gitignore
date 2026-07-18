@@ -1,0 +1,24 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+frontend/node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+
+backend/.sessions/
+backend/.cache/
+backend/coverage.xml
+
+.DS_Store
+*.log
+
+# The organizer starter pack is a draft without a final redistribution license.
+RealDoor_Hackathon_Starter_Pack_v1/

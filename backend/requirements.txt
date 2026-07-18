@@ -1,0 +1,12 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+python-multipart==0.0.20
+PyMuPDF==1.26.3
+Pillow==11.3.0
+pytesseract==0.3.13
+jsonschema==4.25.0
+openai==1.97.1
+pytest==8.4.1
+pytest-cov==6.2.1
+httpx==0.28.1
