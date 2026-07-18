@@ -41,6 +41,8 @@ npm --prefix frontend run dev
 
 Open `http://localhost:5173`.
 
+Hosted vision is disabled by default, even when `OPENAI_API_KEY` is set. Enable `REALDOOR_ENABLE_HOSTED_VISION=true` only after confirming the provider's terms, retention controls, and event policy. The upload screen discloses the active extraction mode.
+
 ## Verification
 
 ```bash

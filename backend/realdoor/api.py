@@ -1,0 +1,124 @@
+"""FastAPI application exposing the fixed RealDoor backend contract."""
+
+from __future__ import annotations
+
+from fastapi import FastAPI, File, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from starlette.concurrency import run_in_threadpool
+
+from .models import ConfirmRequest, CorrectionRequest, PacketRequest, QuestionRequest
+from .service import RealDoorService, ServiceError
+
+
+service = RealDoorService()
+app = FastAPI(title="RealDoor backend", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=list(service.settings.allowed_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_headers=["*"],
+)
+
+
+@app.exception_handler(ServiceError)
+async def service_error_handler(_: Request, exc: ServiceError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "service": "realdoor"}
+
+
+@app.get("/api/config")
+def config() -> dict[str, object]:
+    return {
+        "pack_available": service.settings.pack_available,
+        "demo_households": service.demo_households(),
+        "extraction_mode": "local_plus_hosted_vision" if service.settings.hosted_vision_enabled and service.settings.openai_api_key else "local_only",
+        "hosted_vision_provider": "OpenAI" if service.settings.hosted_vision_enabled and service.settings.openai_api_key else None,
+        "rule_version": "frozen-2026-07-18",
+        "effective_date": "2026-05-01",
+        "fiscal_year": 2026,
+        "challenge_window_days": 60,
+        "challenge_convention": (
+            "Under the challenge's frozen simulation convention, evidence dated no more than "
+            "60 days before July 18, 2026 is treated as current. This is not a universal LIHTC rule."
+        ),
+        "rule_citations": service.rules.citations(["HUD-MTSP-001", "HUD-MTSP-002", "CH-READINESS-001"]),
+    }
+
+
+@app.post("/api/sessions")
+def create_session() -> dict[str, object]:
+    return service.create_session().model_dump(mode="json")
+
+
+@app.post("/api/sessions/demo/{household_id}")
+def create_demo_session(household_id: str) -> dict[str, object]:
+    return service.create_demo_session(household_id).model_dump(mode="json")
+
+
+@app.post("/api/sessions/{session_id}/documents")
+async def upload_documents(session_id: str, files: list[UploadFile] = File(...)) -> dict[str, object]:
+    if len(files) > service.settings.max_upload_files:
+        raise ServiceError("Too many files in one upload", 413)
+    uploads: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    for upload in files:
+        data = await upload.read(service.settings.max_upload_bytes + 1)
+        if len(data) > service.settings.max_upload_bytes:
+            raise ServiceError("Uploaded file is too large", 413)
+        total_bytes += len(data)
+        if total_bytes > service.settings.max_upload_total_bytes:
+            raise ServiceError("Combined upload is too large", 413)
+        uploads.append((upload.filename or "document.pdf", data))
+    state = await run_in_threadpool(service.add_documents, session_id, uploads)
+    return state.model_dump(mode="json")
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str) -> dict[str, object]:
+    return service.get_session(session_id).model_dump(mode="json")
+
+
+@app.post("/api/sessions/{session_id}/confirm")
+def confirm_fields(session_id: str, request: ConfirmRequest) -> dict[str, object]:
+    return service.confirm(session_id, request).model_dump(mode="json")
+
+
+@app.patch("/api/sessions/{session_id}/fields/{field_id}")
+def correct_field(session_id: str, field_id: str, request: CorrectionRequest) -> dict[str, object]:
+    return service.correct_field(session_id, field_id, request.value, request.confirmed).model_dump(mode="json")
+
+
+@app.post("/api/sessions/{session_id}/question")
+def ask_question(session_id: str, request: QuestionRequest) -> dict[str, object]:
+    return service.answer_question(session_id, request.question)
+
+
+@app.patch("/api/sessions/{session_id}/packet")
+def update_packet(session_id: str, request: PacketRequest) -> dict[str, object]:
+    return service.update_packet(session_id, request.included_document_ids, request.renter_note).model_dump(mode="json")
+
+
+@app.get("/api/sessions/{session_id}/packet.zip")
+def download_packet(session_id: str) -> Response:
+    packet = service.packet_zip(session_id)
+    return Response(
+        content=packet,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="realdoor-{session_id}-packet.zip"'},
+    )
+
+
+@app.get("/api/sessions/{session_id}/documents/{document_id}/page/{page_number}.png")
+def document_page(session_id: str, document_id: str, page_number: int) -> Response:
+    return Response(content=service.page_png(session_id, document_id, page_number), media_type="image/png")
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> dict[str, object]:
+    return service.delete_session(session_id)
