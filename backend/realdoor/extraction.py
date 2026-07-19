@@ -9,6 +9,7 @@ untrusted input and is never returned as instructions.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import re
@@ -39,10 +40,11 @@ ALLOWED_FIELDS: dict[str, tuple[str, ...]] = {
         "hourly_rate",
         "gross_pay",
         "net_pay",
+        "source_name",
     ),
-    "employment_letter": ("person_name", "document_date", "weekly_hours", "hourly_rate"),
-    "benefit_letter": ("person_name", "document_date", "monthly_benefit", "benefit_frequency"),
-    "gig_statement": ("person_name", "statement_month", "gross_receipts", "platform_fees"),
+    "employment_letter": ("person_name", "document_date", "weekly_hours", "hourly_rate", "source_name"),
+    "benefit_letter": ("person_name", "document_date", "monthly_benefit", "benefit_frequency", "source_name"),
+    "gig_statement": ("person_name", "statement_month", "gross_receipts", "platform_fees", "source_name"),
 }
 
 FIELD_LABELS: dict[str, str] = {
@@ -65,6 +67,7 @@ FIELD_LABELS: dict[str, str] = {
     "statement_month": "Statement month",
     "gross_receipts": "Gross receipts",
     "platform_fees": "Platform fees",
+    "source_name": "Employer or source",
 }
 
 FIELD_TYPES: dict[str, str] = {
@@ -87,6 +90,7 @@ FIELD_TYPES: dict[str, str] = {
     "statement_month": "month",
     "gross_receipts": "number",
     "platform_fees": "number",
+    "source_name": "string",
 }
 
 
@@ -278,6 +282,66 @@ def _find_value(page: PageContext, spec: FieldSpec, field_name: str) -> tuple[An
     return None
 
 
+def _find_source_name(page: PageContext, document_type: str) -> tuple[Any, list[float], float] | None:
+    markers = {
+        "pay_stub": ("PAY", "STUB"),
+        "employment_letter": ("EMPLOYMENT", "LETTER"),
+        "benefit_letter": ("BENEFIT", "LETTER"),
+        "gig_statement": ("GIG", "STATEMENT"),
+    }
+    marker = markers.get(document_type)
+    if marker is None:
+        return None
+    rows = _row_words(page.words)
+    marker_found = any(_anchor_in_row(row, marker) is not None for row in rows[:20])
+    if not marker_found:
+        return None
+    for row in rows[:20]:
+        if any(
+            word.x0 < 0 or word.y0 < 0 or word.x1 > page.width or word.y1 > page.height
+            for word in row
+        ):
+            continue
+        if min(word.y0 for word in row) > 150:
+            continue
+        match = _anchor_in_row(row, marker)
+        if match is not None and match[0] > 0:
+            selected = row[: match[0]]
+        elif match is not None:
+            continue
+        else:
+            selected = row
+        value = " ".join(word.text for word in selected).strip()
+        upper = value.upper()
+        if (
+            not value
+            or "SYNTHETIC" in upper
+            or "TRAINING FIXTURE" in upper
+            or "REAL DOCUMENT" in upper
+            or re.search(r"HH-\d{3}-D\d{2}", upper)
+        ):
+            continue
+        top_box = [
+            min(word.x0 for word in selected),
+            min(word.y0 for word in selected),
+            max(word.x1 for word in selected),
+            max(word.y1 for word in selected),
+        ]
+        pdf_box = [round(item, 2) for item in pymupdf_to_pdf_bottom_left(top_box, page.height)]
+        pdf_box = [
+            max(0.0, min(page.width, pdf_box[0])),
+            max(0.0, min(page.height, pdf_box[1])),
+            max(0.0, min(page.width, pdf_box[2])),
+            max(0.0, min(page.height, pdf_box[3])),
+        ]
+        if not (pdf_box[0] < pdf_box[2] and pdf_box[1] < pdf_box[3]):
+            continue
+        validate_bbox(pdf_box, page.width, page.height)
+        confidence = sum(word.confidence for word in selected) / len(selected)
+        return value, pdf_box, round(confidence, 4)
+    return None
+
+
 def _classify(text: str, file_name: str) -> str:
     upper = text.upper()
     if "APPLICATION SUMMARY" in upper:
@@ -453,11 +517,33 @@ def _ocr_page(page: fitz.Page, page_number: int, settings: Settings) -> PageCont
 
     pixmap = page.get_pixmap(dpi=settings.ocr_dpi, alpha=False)
     image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    return _ocr_image_context(
+        image,
+        page_number,
+        float(page.rect.width),
+        float(page.rect.height),
+        pixmap.tobytes("png"),
+    )
+
+
+def _ocr_image_context(
+    image: Any,
+    page_number: int,
+    page_width: float,
+    page_height: float,
+    image_bytes: bytes,
+) -> PageContext:
+    try:
+        import pytesseract
+    except ImportError as exc:
+        raise ExtractionError("Tesseract Python support is not installed") from exc
+
     try:
         data = pytesseract.image_to_data(image, config="--psm 6", output_type=pytesseract.Output.DICT)
     except Exception as exc:
         raise ExtractionError("Tesseract could not process the raster page") from exc
-    scale = 72.0 / settings.ocr_dpi
+    scale_x = page_width / image.width
+    scale_y = page_height / image.height
     words: list[Word] = []
     grouped: dict[tuple[int, int, int], list[str]] = {}
     for index, raw_text in enumerate(data.get("text", [])):
@@ -473,22 +559,63 @@ def _ocr_page(page: fitz.Page, page_number: int, settings: Settings) -> PageCont
             int(data.get("par_num", [0])[index]),
             int(data.get("line_num", [index])[index]),
         )
-        left = float(data["left"][index]) * scale
-        top = float(data["top"][index]) * scale
-        width = float(data["width"][index]) * scale
-        height = float(data["height"][index]) * scale
+        left = float(data["left"][index]) * scale_x
+        top = float(data["top"][index]) * scale_y
+        width = float(data["width"][index]) * scale_x
+        height = float(data["height"][index]) * scale_y
         words.append(Word(text, left, top, left + width, top + height, confidence, line_key))
         grouped.setdefault(line_key, []).append(text)
     text = "\n".join(" ".join(grouped[key]) for key in sorted(grouped))
     return PageContext(
         page_number=page_number,
-        width=float(page.rect.width),
-        height=float(page.rect.height),
+        width=page_width,
+        height=page_height,
         words=tuple(words),
         text=text,
         method="ocr",
-        image=pixmap.tobytes("png"),
+        image=image_bytes,
     )
+
+
+def _rendered_value_matches(expected: Any, rendered: Any) -> bool:
+    if isinstance(expected, str) and isinstance(rendered, str):
+        return " ".join(expected.casefold().split()) == " ".join(rendered.casefold().split())
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        return isinstance(rendered, (int, float)) and float(expected) == float(rendered)
+    return expected == rendered
+
+
+def verify_rendered_text_layer(
+    document: DocumentRecord,
+    page_images: dict[int, bytes],
+) -> None:
+    """Verify text-layer replacement values against deterministic rendered OCR."""
+
+    text_fields = [field for field in document.fields if field.method == "text_layer"]
+    if not text_fields:
+        return
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise ExtractionError("Tesseract Python support is not installed") from exc
+
+    rendered_pages: dict[int, PageContext] = {}
+    for field in text_fields:
+        if field.page is None or field.page not in page_images:
+            raise ExtractionError("Rendered verification is missing a source page")
+        page = rendered_pages.get(field.page)
+        if page is None:
+            image_bytes = page_images[field.page]
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                page = _ocr_image_context(image.convert("RGB"), field.page, 612.0, 792.0, image_bytes)
+            rendered_pages[field.page] = page
+        if field.name == "source_name":
+            found = _find_source_name(page, document.document_type)
+        else:
+            spec = TEMPLATE_SPECS.get(document.document_type, {}).get(field.name)
+            found = _find_value(page, spec, field.name) if spec is not None else None
+        if found is None or not _rendered_value_matches(field.extracted_value, found[0]):
+            raise ExtractionError(f"Rendered page does not verify {field.name}")
 
 
 def extract_document(
@@ -497,6 +624,7 @@ def extract_document(
     settings: Settings,
     document_id: str | None = None,
     expected_type: str | None = None,
+    allow_vision: bool = True,
 ) -> ExtractionResult:
     """Extract one PDF into a contract-shaped document record."""
 
@@ -527,7 +655,7 @@ def extract_document(
                 try:
                     pages.append(_ocr_page(page, page_number, settings))
                 except ExtractionError:
-                    if not settings.hosted_vision_enabled or not settings.openai_api_key:
+                    if not allow_vision or not settings.hosted_vision_enabled or not settings.openai_api_key:
                         raise
                     pages.append(
                         PageContext(
@@ -554,11 +682,13 @@ def extract_document(
     vision_missing: list[str] = []
     values: dict[str, tuple[Any, int, list[float], float, str]] = {}
     for name in ALLOWED_FIELDS.get(document_type, ()):
-        spec = specs[name]
         found: tuple[Any, list[float], float] | None = None
         found_page: PageContext | None = None
         for page in pages:
-            found = _find_value(page, spec, name)
+            if name == "source_name":
+                found = _find_source_name(page, document_type)
+            else:
+                found = _find_value(page, specs[name], name)
             if found is not None:
                 found_page = page
                 break
@@ -568,7 +698,7 @@ def extract_document(
         value, bbox, confidence = found
         values[name] = (value, found_page.page_number, bbox, confidence, found_page.method)  # type: ignore[union-attr]
 
-    if vision_missing and settings.openai_api_key and pages:
+    if allow_vision and vision_missing and settings.openai_api_key and pages:
         vision_values = _vision_extract(settings, pages[0].image, document_type, vision_missing)
         for name in vision_missing:
             value = _normalize_vision_value(name, vision_values.get(name))

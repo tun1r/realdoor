@@ -27,7 +27,9 @@ def _field_citation(field: Any) -> str:
 
 def build_packet_zip(state: SessionState, repository: SessionRepository, household_id: str) -> bytes:
     selected_ids = set(state.packet.included_document_ids)
-    selected_docs = [document for document in state.documents if document.id in selected_ids]
+    selected_docs = [
+        document for document in state.documents if document.status == "active" and document.id in selected_ids
+    ]
     generated_at = datetime.now(timezone.utc).isoformat()
     source_names: dict[str, str] = {}
     for document in selected_docs:
@@ -40,13 +42,25 @@ def build_packet_zip(state: SessionState, repository: SessionRepository, househo
         "generated_at": generated_at,
         "renter_note": state.packet.renter_note,
         "included_document_ids": [document.id for document in selected_docs],
+        "packet_complete": state.packet.packet_complete,
+        "excluded_active_document_ids": state.packet.excluded_active_document_ids,
+        "warnings": (
+            []
+            if state.packet.packet_complete
+            else [
+                "Packet is incomplete. The following active documents were omitted: "
+                + ", ".join(state.packet.excluded_active_document_ids)
+            ]
+        ),
         "documents": [document.model_dump(mode="json") for document in selected_docs],
         "analysis": state.analysis.model_dump(mode="json") if state.analysis else None,
-        "decision_boundary": "No eligibility determination is included.",
+        "decision_boundary": (
+            state.analysis.decision_boundary if state.analysis else "No program determination was made."
+        ),
         "source_files": {document_id: f"documents/{name}" for document_id, name in source_names.items()},
     }
     submission_json = None
-    if state.analysis is not None:
+    if state.packet.packet_complete and state.analysis is not None:
         citations = [
             citation
             for source in state.analysis.income_sources
@@ -71,6 +85,11 @@ def build_packet_zip(state: SessionState, repository: SessionRepository, househo
     ]
     if state.packet.renter_note:
         html_parts.append(f'<p class="note"><strong>Renter note</strong><br>{escape(state.packet.renter_note)}</p>')
+    if not state.packet.packet_complete:
+        omitted = ", ".join(state.packet.excluded_active_document_ids)
+        html_parts.append(
+            f'<p class="note"><strong>Incomplete packet</strong><br>Omitted active documents: {escape(omitted)}</p>'
+        )
     html_parts.append("<h2>Analysis</h2>")
     if state.analysis:
         analysis = state.analysis
@@ -86,7 +105,8 @@ def build_packet_zip(state: SessionState, repository: SessionRepository, househo
         )
     else:
         html_parts.append("<p>Analysis is not available until extracted fields are confirmed.</p>")
-    html_parts.append('<p class="boundary">No eligibility determination is included.</p>')
+    boundary = state.analysis.decision_boundary if state.analysis else "No program determination was made."
+    html_parts.append(f'<p class="boundary">{escape(boundary)}</p>')
     html_parts.append("<h2>Included source documents</h2>")
     for document in selected_docs:
         html_parts.append(f"<section><h3>{escape(document.file_name)}</h3><p>{escape(document.document_type)}</p>")

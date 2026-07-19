@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from .models import ConfirmRequest, CorrectionRequest, PacketRequest, QuestionRequest
+from .models import ConfirmRequest, CorrectionRequest, ErrorResponse, PacketRequest, QuestionRequest, SessionState
 from .service import RealDoorService, ServiceError
 
 
@@ -77,6 +77,43 @@ async def upload_documents(session_id: str, files: list[UploadFile] = File(...))
         uploads.append((upload.filename or "document.pdf", data))
     state = await run_in_threadpool(service.add_documents, session_id, uploads)
     return state.model_dump(mode="json")
+
+
+@app.post(
+    "/api/sessions/{session_id}/documents/{document_id}/replacement",
+    response_model=SessionState,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session or active replacement target not found"},
+        409: {"model": ErrorResponse, "description": "Target is inactive or already has a pending replacement"},
+        413: {"model": ErrorResponse, "description": "Replacement PDF exceeds the upload limit"},
+        422: {"model": ErrorResponse, "description": "Replacement PDF failed extraction or validation"},
+    },
+)
+async def stage_replacement(session_id: str, document_id: str, file: UploadFile = File(...)) -> dict[str, object]:
+    data = await file.read(service.settings.max_upload_bytes + 1)
+    if len(data) > service.settings.max_upload_bytes:
+        raise ServiceError("Uploaded file is too large", 413)
+    state = await run_in_threadpool(
+        service.stage_replacement,
+        session_id,
+        document_id,
+        file.filename or "replacement.pdf",
+        data,
+    )
+    return state.model_dump(mode="json")
+
+
+@app.post(
+    "/api/sessions/{session_id}/documents/{pending_document_id}/confirm-replacement",
+    response_model=SessionState,
+    responses={
+        404: {"model": ErrorResponse, "description": "Session or pending replacement not found"},
+        409: {"model": ErrorResponse, "description": "Document is not pending or its target is no longer active"},
+        422: {"model": ErrorResponse, "description": "Pending replacement no longer passes promotion validation"},
+    },
+)
+def confirm_replacement(session_id: str, pending_document_id: str) -> dict[str, object]:
+    return service.confirm_replacement(session_id, pending_document_id).model_dump(mode="json")
 
 
 @app.get("/api/sessions/{session_id}")

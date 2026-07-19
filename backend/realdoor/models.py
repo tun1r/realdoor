@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class CorrectionRecord(BaseModel):
@@ -53,6 +53,30 @@ class DocumentRecord(BaseModel):
     rasterized: bool
     contains_untrusted_instruction: bool
     fields: list[FieldRecord] = Field(default_factory=list)
+    status: Literal["active", "pending_replacement", "superseded"] = "active"
+    replaces_document_id: str | None = None
+    superseded_by_document_id: str | None = None
+    superseded_at: str | None = None
+
+
+class ReviewAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["add_document", "correct_field", "review_document", "replace_document"]
+    document_id: str | None = None
+    label: str
+
+
+class ReviewIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str
+    code: str
+    message: str
+    affected_document_ids: list[str] = Field(default_factory=list)
+    affected_field_ids: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    action: ReviewAction
 
 
 class IncomeSource(BaseModel):
@@ -79,10 +103,16 @@ class Analysis(BaseModel):
     comparison: str
     arithmetic_difference: float | None = None
     readiness_status: str
+    review_issues: list[ReviewIssue] = Field(default_factory=list)
     review_reasons: list[str] = Field(default_factory=list)
     income_sources: list[IncomeSource] = Field(default_factory=list)
     rule_citations: list[dict[str, Any]] = Field(default_factory=list)
     decision_boundary: str
+
+    @model_validator(mode="after")
+    def derive_review_reasons(self) -> "Analysis":
+        self.review_reasons = list(dict.fromkeys(issue.code for issue in self.review_issues))
+        return self
 
 
 class PacketState(BaseModel):
@@ -90,11 +120,30 @@ class PacketState(BaseModel):
 
     included_document_ids: list[str] = Field(default_factory=list)
     renter_note: str | None = None
+    packet_complete: bool = True
+    excluded_active_document_ids: list[str] = Field(default_factory=list)
+
+
+class ReplacementEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    old_document_id: str
+    new_document_id: str
+    timestamp: str
+    resolved_issue_ids: list[str] = Field(default_factory=list)
+    resolved_issues: list[ReviewIssue] = Field(default_factory=list)
+
+
+class ErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    detail: str
 
 
 class SessionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: Literal[2] = 2
     id: str
     created_at: str
     updated_at: str
@@ -103,6 +152,7 @@ class SessionState(BaseModel):
     analysis: Analysis | None = None
     packet: PacketState = Field(default_factory=PacketState)
     all_fields_confirmed: bool = False
+    replacement_events: list[ReplacementEvent] = Field(default_factory=list)
 
 
 class ConfirmRequest(BaseModel):

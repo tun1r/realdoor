@@ -3,7 +3,6 @@ import json
 import zipfile
 
 import pytest
-from jsonschema import validate
 
 from realdoor.models import ConfirmRequest
 from realdoor.service import ServiceError
@@ -49,10 +48,9 @@ def test_packet_zip_contains_only_explicitly_selected_sources(service):
         assert all(document.file_name not in " ".join(names) for document in state.documents[1:])
         packet = json.loads(archive.read("packet.json"))
         assert "session_id" not in packet
-        assert packet["analysis"]["income_sources"] == []
-        assert "submission.json" in names
-        submission = json.loads(archive.read("submission.json"))
-        schema_path = service.settings.pack_path / "starter" / "schemas" / "submission.schema.json"
-        validate(submission, json.loads(schema_path.read_text(encoding="utf-8")))
-        assert submission["household_id"] == "HH-001"
-        assert submission["annualized_income"] == 0
+        assert packet["analysis"]["annualized_income"] == 56316.0
+        assert packet["analysis"]["readiness_status"] == "READY_TO_REVIEW"
+        assert packet["packet_complete"] is False
+        assert packet["excluded_active_document_ids"] == [document.id for document in state.documents[1:]]
+        assert packet["warnings"]
+        assert "submission.json" not in names

@@ -68,3 +68,24 @@ def test_fixed_api_contract_smoke(settings, monkeypatch):
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
     assert client.get(f"/api/sessions/{session_id}").status_code == 404
+
+
+def test_replacement_openapi_contract(settings, monkeypatch):
+    monkeypatch.setattr(api, "service", RealDoorService(settings))
+    schema = TestClient(api.app).get("/openapi.json").json()
+    stage = schema["paths"]["/api/sessions/{session_id}/documents/{document_id}/replacement"]["post"]
+    confirm = schema["paths"][
+        "/api/sessions/{session_id}/documents/{pending_document_id}/confirm-replacement"
+    ]["post"]
+
+    assert stage["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SessionState"
+    }
+    assert confirm["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/SessionState"
+    }
+    assert {"404", "409", "413", "422"}.issubset(stage["responses"])
+    assert {"404", "409", "422"}.issubset(confirm["responses"])
+    assert stage["responses"]["409"]["description"] == (
+        "Target is inactive or already has a pending replacement"
+    )
