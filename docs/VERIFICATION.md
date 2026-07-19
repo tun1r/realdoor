@@ -74,7 +74,7 @@ The six-household expected outcomes are `HH-001` `56316.0/READY_TO_REVIEW`, `HH-
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` runs on pushes and pull requests. Its Python 3.11 backend job installs `backend/requirements.txt` and runs `pytest backend/tests -q` without the external organizer pack, so pack-backed tests skip while the project-owned HH-005 replacement suite runs. Its Node 22 frontend job runs `npm ci`, unit tests, lint, and build. Playwright is intentionally a local gate and is not claimed as a GitHub Actions step.
+`.github/workflows/ci.yml` runs on pushes and pull requests. Its Python 3.11 backend job installs the Tesseract system binary plus `backend/requirements.txt` and runs `pytest backend/tests -q` without the external organizer pack, so pack-backed tests skip while the project-owned HH-005 replacement suite and rendered-page verification run. Its Node 22 frontend job runs `npm ci`, unit tests, lint, and build. Playwright is intentionally a local gate and is not claimed as a GitHub Actions step.
 
 Run the opt-in provider test only with a local, ignored `.env` containing the key and explicit hosted-vision switch:
 
