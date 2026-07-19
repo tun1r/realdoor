@@ -312,8 +312,8 @@ def _vision_extract(
     """Use the opt-in provider only after local extraction has failed.
 
     Vision values intentionally have no source box. They can be shown for
-    correction but cannot make a packet ready until the renter supplies a
-    page-level citation through a correction or a later local extraction.
+    correction but cannot make a packet ready unless a later local extraction
+    supplies page-level provenance.
     """
 
     if not settings.hosted_vision_enabled or not settings.openai_api_key or not missing_fields:
