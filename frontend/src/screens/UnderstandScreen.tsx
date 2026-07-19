@@ -174,7 +174,13 @@ export function UnderstandScreen({ onInspect }: UnderstandScreenProps) {
                   const citationFields = (source.citations ?? [])
                     .map((citation) => citation.field_id ? findField(session, citation.field_id) : null)
                     .filter((field): field is Field => field !== null)
-                  const traceFields = directField ? [directField] : citationFields
+                  const traceFields = Array.from(
+                    (directField ? [directField] : citationFields).reduce((unique, field) => {
+                      const key = `${field.document_id}:${field.page ?? 'page'}`
+                      if (!unique.has(key)) unique.set(key, field)
+                      return unique
+                    }, new Map<string, Field>()).values(),
+                  )
                   const sourceName = source.label ?? source.person ?? source.source_type ?? source.source_id ?? `Income source ${index + 1}`
                   return (
                     <div className="source-table__row" role="row" key={source.field_id ?? `${source.label}-${index}`}>
@@ -186,16 +192,16 @@ export function UnderstandScreen({ onInspect }: UnderstandScreenProps) {
                       <span role="cell">
                         {traceFields.length > 0 ? (
                           <span className="source-traces">
-                            {traceFields.map((field) => (
+                            {traceFields.map((field, traceIndex) => (
                               <button
                                 type="button"
                                 className="source-link"
                                 key={field.id}
                                 onClick={(event) => onInspect(field, event.currentTarget)}
-                                aria-label={`Inspect source for ${field.label}`}
+                                aria-label={`Inspect source ${traceIndex + 1} for ${sourceName}: ${field.label}`}
                               >
                                 <FileSearch aria-hidden="true" size={15} />
-                                Page {field.page ?? 'not reported'}
+                                Source {traceIndex + 1} · p{field.page ?? '?'}
                               </button>
                             ))}
                           </span>

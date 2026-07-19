@@ -1,6 +1,6 @@
 # RealDoor
 
-RealDoor is a renter-controlled application-readiness copilot for the RealPage Hack-Nation challenge. It turns synthetic housing documents into renter-confirmed, citation-backed evidence that a qualified human can review.
+RealDoor is a renter-controlled desktop web application for the RealPage Hack-Nation challenge. It turns synthetic housing documents into renter-confirmed, citation-backed evidence that a qualified human can review.
 
 RealDoor never determines eligibility, approval, denial, priority, or housing availability.
 
@@ -48,7 +48,9 @@ Hosted vision is disabled by default, even when `OPENAI_API_KEY` is set. Enable 
 ```bash
 .venv/bin/pytest backend/tests -q
 npm --prefix frontend test
+npm --prefix frontend run lint
 npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 ```
 
 With the starter pack configured, run the pack integration suite:
@@ -67,3 +69,5 @@ With the starter pack configured, run the pack integration suite:
 - Session deletion removes uploads, extracted fields, audit metadata, calculations, and exports.
 
 This project is a hackathon simulation, not legal advice or a production eligibility system.
+
+See `docs/DEMO.md` for the judge walkthrough and `docs/VERIFICATION.md` for the requirement-to-evidence checklist.

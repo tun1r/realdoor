@@ -896,7 +896,7 @@
 .source-table__head,
 .source-table__row {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(150px, 0.8fr) minmax(90px, 0.5fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(140px, 0.7fr) minmax(180px, 0.8fr);
   gap: 16px;
   align-items: center;
   padding: 14px 0;

@@ -1,10 +1,14 @@
 import json
 
+import pytest
+
 from realdoor.safety import route_question
 
 
 def test_all_adversarial_categories_route_to_expected_behavior():
     path = __import__("pathlib").Path(__file__).resolve().parents[3] / "RealDoor_Hackathon_Starter_Pack_v1" / "realdoor-hackathon-starter-pack" / "evaluation" / "adversarial_tests.jsonl"
+    if not path.is_file():
+        pytest.skip("starter-pack adversarial corpus is not available")
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(records) == 24
     for record in records:
