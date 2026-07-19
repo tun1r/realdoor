@@ -8,6 +8,7 @@ import type {
   AppConfig,
   BusyKind,
   Field,
+  FocusIntent,
   JsonScalar,
   QuestionResponse,
   SessionState,
@@ -40,6 +41,7 @@ export function AppStateProvider({
   const [busy, setBusy] = useState<BusyKind>(null)
   const [error, setError] = useState<ApiErrorState | null>(null)
   const [announcement, setAnnouncement] = useState('')
+  const [focusIntent, setFocusIntent] = useState<FocusIntent | null>(null)
   const [isOnline, setIsOnline] = useState(
     () => typeof navigator === 'undefined' || navigator.onLine,
   )
@@ -170,6 +172,51 @@ export function AppStateProvider({
     }
   }
 
+  const stageReplacement = async (activeDocumentId: string, file: File, trigger: HTMLButtonElement) => {
+    if (!session) return
+
+    setBusy('replacement-uploading')
+    setError(null)
+    setAnnouncement('Uploading replacement')
+    try {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+      setBusy('replacement-extracting')
+      setAnnouncement('Extracting and validating replacement evidence')
+      const result = await client.stageReplacement(session.id, activeDocumentId, file)
+      const nextSession = await resolveSession(result, session.id)
+      const pending = nextSession.documents.find(
+        (document) => document.status === 'pending_replacement' && document.replaces_document_id === activeDocumentId,
+      )
+      setSession(nextSession)
+      setLastQuestion(null)
+      setView('profile')
+      setFocusIntent(pending ? { type: 'pending-replacement', documentId: pending.id } : null)
+      setAnnouncement('Replacement evidence is staged and awaiting renter confirmation.')
+    } catch (caughtError) {
+      setError({ message: getErrorMessage(caughtError) })
+      setFocusIntent({ type: 'replacement-trigger', trigger })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const confirmReplacement = async (pendingDocumentId: string) => {
+    if (!session) return
+    setAnnouncement('Confirming replacement evidence')
+    try {
+      const nextSession = await run('confirming-replacement', async () => {
+        const result = await client.confirmReplacement(session.id, pendingDocumentId)
+        return resolveSession(result, session.id)
+      })
+      setSession(nextSession)
+      setView('prepare')
+      setFocusIntent({ type: 'readiness-result' })
+      setAnnouncement('Replacement evidence confirmed. Readiness is updated for human review.')
+    } catch {
+      // The error summary is rendered by the shell.
+    }
+  }
+
   const confirmAllFields = async () => {
     if (!session) return
     try {
@@ -269,12 +316,15 @@ export function AppStateProvider({
     busy,
     error,
     announcement,
+    focusIntent,
     isOnline,
     lastQuestion,
     navigate,
     createBlankSession,
     loadDemoSession,
     uploadDocuments,
+    stageReplacement,
+    confirmReplacement,
     confirmAllFields,
     correctField,
     askQuestion,
@@ -282,6 +332,7 @@ export function AppStateProvider({
     downloadPacket,
     deleteCurrentSession,
     clearError: () => setError(null),
+    clearFocusIntent: () => setFocusIntent(null),
   }
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>

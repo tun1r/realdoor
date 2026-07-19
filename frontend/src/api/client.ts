@@ -100,6 +100,23 @@ export class ApiClient {
     })
   }
 
+  stageReplacement(sessionId: string, activeDocumentId: string, file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return this.request<SessionState>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/documents/${encodeURIComponent(activeDocumentId)}/replacement`,
+      { method: 'POST', body: formData },
+    )
+  }
+
+  confirmReplacement(sessionId: string, pendingDocumentId: string) {
+    return this.request<SessionState>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/documents/${encodeURIComponent(pendingDocumentId)}/confirm-replacement`,
+      { method: 'POST' },
+    )
+  }
+
   getSession(sessionId: string) {
     return this.request<SessionState>(`/api/sessions/${encodeURIComponent(sessionId)}`)
   }

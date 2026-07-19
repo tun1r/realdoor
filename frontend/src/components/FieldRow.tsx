@@ -10,6 +10,7 @@ interface FieldRowProps {
   hasError: boolean
   onInspect: (field: Field, opener: HTMLButtonElement) => void
   onSave: (field: Field, value: JsonScalar) => Promise<void>
+  readOnly?: boolean
 }
 
 function confidenceLabel(confidence: number | null) {
@@ -18,7 +19,7 @@ function confidenceLabel(confidence: number | null) {
   return `${Math.round(percentage)}% confidence`
 }
 
-export function FieldRow({ field, documentName, busy, hasError, onInspect, onSave }: FieldRowProps) {
+export function FieldRow({ field, documentName, busy, hasError, onInspect, onSave, readOnly = false }: FieldRowProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(inputValue(field.confirmed ? field.confirmed_value : field.extracted_value))
 
@@ -112,7 +113,7 @@ export function FieldRow({ field, documentName, busy, hasError, onInspect, onSav
           <FileSearch aria-hidden="true" size={15} />
           {sourceLabel(documentName, field.page)}
         </button>
-        {!editing ? (
+        {!editing && !readOnly ? (
           <button
             type="button"
             className="text-button"

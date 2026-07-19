@@ -1,41 +1,72 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, FileCheck2, FileSearch, FileText, LoaderCircle, Package, Save, Trash2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, FileCheck2, FileSearch, FileText, FileUp, LoaderCircle, Package, Save, Trash2 } from 'lucide-react'
 import { DeleteDialog } from '../components/DeleteDialog'
 import { useAppState } from '../state/useAppState'
-import type { Field } from '../types'
+import type { DocumentRecord, Field, ReviewIssue } from '../types'
+import { formatCurrency, formatValue } from '../utils'
 
 interface PrepareScreenProps {
   onInspect: (field: Field, opener: HTMLButtonElement) => void
 }
 
-const reasonDescriptions: Record<string, string> = {
-  PAY_STUB_TOTAL_CONFLICT: 'A displayed gross-pay total differs from regular hours multiplied by hourly rate.',
-  GIG_INCOME_UNCORROBORATED: 'Gig receipts need an independent corroborating source before handoff.',
-  EMPLOYMENT_LETTER_EXPIRED: 'An employment letter falls outside the challenge simulation’s 60-day window.',
-  APPLICATION_SUMMARY_EXPIRED: 'The application summary falls outside the challenge simulation’s 60-day window.',
-  PAY_STUB_EXPIRED: 'A pay statement falls outside the challenge simulation’s 60-day window.',
-  EMPLOYMENT_INCOME_UNCORROBORATED: 'Employment-letter wages are not corroborated by a current pay statement.',
-  HOUSEHOLD_IDENTITY_CONFLICT: 'An income document names a different person from the application summary.',
-  MISSING_CITATION: 'A material value has no valid page-level source box.',
-  MISSING_PAY_STUB: 'No pay statement is present for the wage evidence.',
-  MISSING_APPLICATION_SUMMARY: 'No application summary is present.',
-  MISSING_REQUIRED_FIELD: 'A material field is unresolved or unconfirmed.',
-  NO_CONFIRMED_INCOME: 'No confirmed recurring income source can be calculated.',
-  NO_FROZEN_THRESHOLD: 'The household size is outside the frozen threshold table.',
-}
+function ReplacementPicker({
+  issue,
+  document,
+  disabled,
+  onStage,
+}: {
+  issue: ReviewIssue
+  document: DocumentRecord
+  disabled: boolean
+  onStage: (activeDocumentId: string, file: File, trigger: HTMLButtonElement) => Promise<void>
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const inputId = `replacement-${issue.issue_id}`
 
-function fieldsForReason(reason: string, fields: Field[]) {
-  const names: Record<string, string[]> = {
-    PAY_STUB_TOTAL_CONFLICT: ['gross_pay', 'regular_hours', 'hourly_rate'],
-    GIG_INCOME_UNCORROBORATED: ['gross_receipts', 'statement_month'],
-    EMPLOYMENT_LETTER_EXPIRED: ['document_date'],
-    APPLICATION_SUMMARY_EXPIRED: ['application_date'],
-    PAY_STUB_EXPIRED: ['pay_date'],
-    EMPLOYMENT_INCOME_UNCORROBORATED: ['weekly_hours', 'hourly_rate'],
-    HOUSEHOLD_IDENTITY_CONFLICT: ['person_name'],
-  }
-  if (reason === 'MISSING_CITATION') return fields.filter((field) => !field.bbox)
-  return fields.filter((field) => names[reason]?.includes(field.name)).slice(0, 4)
+  const restoreTrigger = () => triggerRef.current?.focus()
+
+  useEffect(() => {
+    const input = inputRef.current
+    if (!input) return
+    input.addEventListener('cancel', restoreTrigger)
+    return () => input.removeEventListener('cancel', restoreTrigger)
+  }, [])
+
+  return (
+    <span className="replacement-picker">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="button button--small button--secondary"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+      >
+        <FileUp aria-hidden="true" size={16} />
+        Replace document
+      </button>
+      <label className="sr-only" htmlFor={inputId}>Choose a replacement PDF for {document.file_name}</label>
+      <input
+        ref={inputRef}
+        id={inputId}
+        className="sr-only"
+        type="file"
+        accept="application/pdf,.pdf"
+        disabled={disabled}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          const trigger = triggerRef.current
+          if (!file || !trigger) {
+            restoreTrigger()
+            return
+          }
+          void onStage(document.id, file, trigger).finally(() => {
+            if (inputRef.current) inputRef.current.value = ''
+          })
+        }}
+      />
+    </span>
+  )
 }
 
 export function PrepareScreen({ onInspect }: PrepareScreenProps) {
@@ -45,11 +76,15 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
     updatePacket,
     downloadPacket,
     deleteCurrentSession,
+    stageReplacement,
+    focusIntent,
+    clearFocusIntent,
   } = useAppState()
   const [includedDocumentIds, setIncludedDocumentIds] = useState<string[]>([])
   const [renterNote, setRenterNote] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
   const deleteTriggerRef = useRef<HTMLButtonElement>(null)
+  const readinessRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!session) return
@@ -57,11 +92,22 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
     setRenterNote(session.packet.renter_note ?? '')
   }, [session])
 
+  useEffect(() => {
+    if (focusIntent?.type !== 'readiness-result') return
+    readinessRef.current?.focus()
+    clearFocusIntent()
+  }, [clearFocusIntent, focusIntent])
+
   if (!session) return null
 
   const status = session.analysis?.readiness_status ?? 'NEEDS_REVIEW'
-  const reviewReasons = session.analysis?.review_reasons ?? ['Arithmetic is not available for this session yet.']
-  const allFields = session.documents.flatMap((document) => document.fields)
+  const reviewIssues = session.analysis?.review_issues ?? []
+  const fieldsById = new Map(session.documents.flatMap((document) => document.fields).map((field) => [field.id, field]))
+  const activeDocuments = session.documents.filter((document) => document.status === 'active')
+  const documentsById = new Map(session.documents.map((document) => [document.id, document]))
+  const omittedDocuments = activeDocuments.filter((document) => !includedDocumentIds.includes(document.id))
+  const packetComplete = activeDocuments.length > 0 && omittedDocuments.length === 0
+  const packetExportReady = packetComplete && session.analysis !== null
   const isBusy = busy !== null
 
   const closeDelete = () => {
@@ -77,7 +123,12 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
           <h1>Prepare</h1>
           <p>Choose the documents and context a human reviewer should receive. Nothing is sent automatically.</p>
         </div>
-        <div className={`readiness-ledger readiness-ledger--${status === 'READY_TO_REVIEW' ? 'ready' : 'review'}`}>
+        <div
+          ref={readinessRef}
+          className={`readiness-ledger readiness-ledger--${status === 'READY_TO_REVIEW' ? 'ready' : 'review'}`}
+          tabIndex={-1}
+          aria-label={`Readiness result: ${status}`}
+        >
           {status === 'READY_TO_REVIEW' ? <CheckCircle2 aria-hidden="true" size={20} /> : <AlertTriangle aria-hidden="true" size={20} />}
           <span>
             <small>Readiness ledger</small>
@@ -96,30 +147,58 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
               </div>
               <FileCheck2 aria-hidden="true" size={21} />
             </div>
+            {session.analysis ? (
+              <dl className="prepare-analysis-summary" aria-label="Canonical analysis summary">
+                <div>
+                  <dt>Annualized income</dt>
+                  <dd>{formatCurrency(session.analysis.annualized_income)}</dd>
+                </div>
+                <div>
+                  <dt>Frozen threshold</dt>
+                  <dd>{formatCurrency(session.analysis.threshold)}</dd>
+                </div>
+              </dl>
+            ) : null}
             <ul className="reason-list">
-              {reviewReasons.length > 0 ? reviewReasons.map((reason, index) => {
-                const fields = fieldsForReason(reason, allFields)
-                return <li key={`${reason}-${index}`}>
+              {reviewIssues.length > 0 ? reviewIssues.map((issue, index) => {
+                const fields = issue.affected_field_ids
+                  .map((fieldId) => fieldsById.get(fieldId))
+                  .filter((field): field is Field => Boolean(field))
+                const actionDocument = issue.action.document_id
+                  ? documentsById.get(issue.action.document_id)
+                  : undefined
+                return <li key={issue.issue_id}>
                   <span className="reason-mark" aria-hidden="true">{index + 1}</span>
                   <span className="reason-copy">
-                    <strong>{reasonDescriptions[reason] ?? 'This record needs a human evidence check before handoff.'}</strong>
-                    <small className="mono">{reason}</small>
-                    {fields.length > 0 ? <span className="source-traces">
-                      {fields.map((field) => <button
-                        type="button"
-                        className="source-link"
-                        key={field.id}
-                        onClick={(event) => onInspect(field, event.currentTarget)}
-                        aria-label={`Inspect evidence for ${reason}: ${field.label}`}
-                      >
-                        <FileSearch aria-hidden="true" size={15} />
-                        {field.label}
-                      </button>)}
-                    </span> : null}
+                    <strong>{issue.message}</strong>
+                    <small className="mono">{issue.code}</small>
+                    {fields.map((field) => (
+                      <span className="issue-citation" key={field.id}>
+                        <span><strong>{field.label}:</strong> {formatValue(field.confirmed ? field.confirmed_value : field.extracted_value, field.value_type)}</span>
+                        <button
+                          type="button"
+                          className="source-link"
+                          onClick={(event) => onInspect(field, event.currentTarget)}
+                          aria-label={`View source for ${field.label} in ${documentsById.get(field.document_id)?.file_name ?? field.document_id}, issue ${issue.code}`}
+                        >
+                          <FileSearch aria-hidden="true" size={15} />
+                          View source
+                        </button>
+                      </span>
+                    ))}
+                    {issue.action.type === 'replace_document' && actionDocument?.status === 'active' ? (
+                      <ReplacementPicker
+                        issue={issue}
+                        document={actionDocument}
+                        disabled={isBusy}
+                        onStage={stageReplacement}
+                      />
+                    ) : null}
                   </span>
                 </li>
-              }) : <li><CheckCircle2 aria-hidden="true" size={18} /><span>No evidence gaps or conflicts were generated for this packet.</span></li>}
+              }) : <li><CheckCircle2 aria-hidden="true" size={18} /><span>{session.analysis ? 'No active review issues.' : 'Review issues are unavailable until active fields are confirmed.'}</span></li>}
             </ul>
+            {session.analysis?.decision_boundary ? <p className="decision-boundary">{session.analysis.decision_boundary}</p> : null}
           </section>
 
           <section className="packet-options" aria-labelledby="documents-title">
@@ -131,7 +210,7 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
               <span className="mono">{includedDocumentIds.length} selected</span>
             </div>
             <div className="document-checkboxes">
-              {session.documents.map((document) => (
+              {activeDocuments.map((document) => (
                 <label className="document-checkbox" key={document.id}>
                   <input
                     type="checkbox"
@@ -152,6 +231,31 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
                   <FileText aria-hidden="true" size={19} />
                 </label>
               ))}
+            </div>
+            <div
+              className={packetComplete ? 'sr-only' : 'packet-incomplete-warning'}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              aria-label="Packet completeness"
+            >
+              {packetExportReady ? (
+                <span>Complete packet. All active documents are selected. submission.json will be included.</span>
+              ) : (
+                <>
+                  <AlertTriangle aria-hidden="true" size={20} />
+                  <div>
+                    <strong>{packetComplete ? 'Packet is waiting for confirmed evidence' : 'Incomplete packet'}</strong>
+                    {omittedDocuments.length > 0 ? <>
+                      <p>Omitted active documents:</p>
+                      <ul>
+                        {omittedDocuments.map((document) => <li key={document.id}>{document.file_name}</li>)}
+                      </ul>
+                    </> : null}
+                    <p>No submission.json will be included{packetComplete ? ' until active evidence is confirmed' : ''}. Canonical readiness remains unchanged.</p>
+                  </div>
+                </>
+              )}
             </div>
             <div className="note-editor">
               <label htmlFor="renter-note">Renter note</label>
@@ -181,7 +285,7 @@ export function PrepareScreen({ onInspect }: PrepareScreenProps) {
             <div className="preview-rule" />
             {includedDocumentIds.length > 0 ? (
               <ol className="preview-documents">
-                {session.documents
+                {activeDocuments
                   .filter((document) => includedDocumentIds.includes(document.id))
                   .map((document) => (
                     <li key={document.id}>

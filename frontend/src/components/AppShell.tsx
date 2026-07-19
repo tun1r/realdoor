@@ -22,8 +22,14 @@ function busyLabel(busy: ReturnType<typeof useAppState>['busy']) {
       return 'Loading demo household'
     case 'uploading':
       return 'Extracting document fields'
+    case 'replacement-uploading':
+      return 'Uploading replacement'
+    case 'replacement-extracting':
+      return 'Extracting and validating replacement evidence'
     case 'confirming':
       return 'Confirming fields'
+    case 'confirming-replacement':
+      return 'Confirming replacement evidence'
     case 'correcting':
       return 'Saving correction'
     case 'question':
@@ -40,13 +46,19 @@ function busyLabel(busy: ReturnType<typeof useAppState>['busy']) {
 }
 
 export function AppShell({ children }: AppShellProps) {
-  const { view, session, busy, error, announcement, isOnline, navigate, clearError } = useAppState()
+  const { view, session, busy, error, announcement, focusIntent, isOnline, navigate, clearError, clearFocusIntent } = useAppState()
   const errorRef = useRef<HTMLDivElement>(null)
   const statusText = busyLabel(busy)
 
   useEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
+
+  useEffect(() => {
+    if (focusIntent?.type !== 'replacement-trigger') return
+    focusIntent.trigger.focus()
+    clearFocusIntent()
+  }, [clearFocusIntent, focusIntent])
 
   const nav = (nextView: View) => {
     if (!session && nextView !== 'welcome') return
@@ -123,7 +135,7 @@ export function AppShell({ children }: AppShellProps) {
                 Offline
               </span>
             ) : null}
-            {statusText ? <span className="busy-marker" aria-live="polite">{statusText}</span> : null}
+            {statusText ? <span className="busy-marker">{statusText}</span> : null}
             {session ? <span className="mono session-id">{session.id.slice(0, 8)}</span> : null}
           </div>
         </header>
@@ -149,7 +161,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         ) : null}
 
-        <main id="main-content" className="main-content" tabIndex={-1}>
+        <main id="main-content" className="main-content" tabIndex={-1} aria-busy={busy !== null}>
           {children}
         </main>
 

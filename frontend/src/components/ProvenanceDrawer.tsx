@@ -103,7 +103,8 @@ export function ProvenanceDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const documentRecord = session.documents.find((document) => document.id === field.document_id)
   const box = displayBox(field)
-  const affectsArithmetic = arithmeticFields.has(field.name)
+  const isActiveDocument = documentRecord?.status === 'active'
+  const affectsArithmetic = isActiveDocument && arithmeticFields.has(field.name)
   const currentValue = field.confirmed ? field.confirmed_value : field.extracted_value
   const effectiveDate = citation?.effective_date ?? config?.effective_date ?? session.updated_at
   const ruleVersion = citation?.rule_id ?? config?.rule_version ?? 'FY-2026'
@@ -240,10 +241,14 @@ export function ProvenanceDrawer({
           <section className="drawer-section" aria-labelledby="uses-title">
             <h3 id="uses-title">Downstream uses</h3>
             <ul className="plain-list">
-              <li>{affectsArithmetic
-                ? (field.confirmed ? 'Included in the confirmed arithmetic ledger.' : 'Held out of arithmetic until you confirm it.')
-                : 'Not used in income arithmetic; retained only as packet evidence.'}</li>
-              <li>Available as a source reference in the packet review.</li>
+              <li>{!isActiveDocument
+                ? `This ${documentRecord?.status === 'pending_replacement' ? 'pending replacement' : 'superseded'} document is held outside canonical arithmetic.`
+                : affectsArithmetic
+                  ? (field.confirmed ? 'Included in the confirmed arithmetic ledger.' : 'Held out of arithmetic until you confirm it.')
+                  : 'Not used in income arithmetic; it can be retained as packet evidence.'}</li>
+              <li>{isActiveDocument
+                ? 'Can be available as a source reference in packet review when the document is included.'
+                : 'Retained only in session provenance and excluded from the current packet.'}</li>
             </ul>
           </section>
 

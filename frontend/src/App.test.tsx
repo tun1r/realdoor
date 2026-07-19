@@ -1,5 +1,5 @@
 import axe from 'axe-core'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -33,6 +33,10 @@ function makeDocument(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
     page_count: 2,
     rasterized: true,
     contains_untrusted_instruction: true,
+    status: 'active',
+    replaces_document_id: null,
+    superseded_by_document_id: null,
+    superseded_at: null,
     fields: [makeField(), makeField({
       id: 'field-household-size',
       name: 'household_size',
@@ -65,6 +69,7 @@ function makeSession(confirmed = false, monthlyWages = 3000, status = 'NEEDS_REV
   ]
 
   return {
+    schema_version: 2,
     id: 'session-001',
     created_at: '2026-07-18T12:00:00Z',
     updated_at: '2026-07-18T12:00:00Z',
@@ -78,7 +83,16 @@ function makeSession(confirmed = false, monthlyWages = 3000, status = 'NEEDS_REV
           comparison: 'annualized income minus frozen threshold',
           arithmetic_difference: monthlyWages * 12 - 50000,
           readiness_status: status,
-          review_reasons: status === 'NEEDS_REVIEW' ? ['Confirm the renter note before handoff.'] : [],
+          review_issues: status === 'NEEDS_REVIEW' ? [{
+            issue_id: 'issue-renter-note',
+            code: 'RENTER_NOTE_REVIEW',
+            message: 'Confirm the renter note before handoff.',
+            affected_document_ids: [],
+            affected_field_ids: [],
+            rule_ids: [],
+            action: { type: 'review_document', document_id: null, label: 'Review note' },
+          }] : [],
+          review_reasons: status === 'NEEDS_REVIEW' ? ['RENTER_NOTE_REVIEW'] : [],
           income_sources: [{
             source_id: 'wage-1',
             source_type: 'wage',
@@ -100,9 +114,115 @@ function makeSession(confirmed = false, monthlyWages = 3000, status = 'NEEDS_REV
     packet: {
       included_document_ids: ['document-paystub'],
       renter_note: '',
+      packet_complete: true,
+      excluded_active_document_ids: [],
     },
     all_fields_confirmed: confirmed,
+    replacement_events: [],
   }
+}
+
+const expiredEmploymentMessage = "Under the challenge\u2019s frozen 60-day document-freshness convention, this employment letter needs replacement."
+
+function makeReplacementSession(phase: 'issue' | 'pending' | 'ready' = 'issue'): SessionState {
+  const session = makeSession(true, 3830.6666667, 'READY_TO_REVIEW')
+  const staleDocument = makeDocument({
+    id: 'HH-005-D04',
+    file_name: 'hh-005_d04_employment_letter.pdf',
+    document_type: 'employment_letter',
+    rasterized: true,
+    contains_untrusted_instruction: false,
+    fields: [makeField({
+      id: 'HH-005-D04:document_date',
+      name: 'document_date',
+      label: 'Document date',
+      value_type: 'date',
+      extracted_value: '2026-04-14',
+      confirmed_value: '2026-04-14',
+      confirmed: true,
+      document_id: 'HH-005-D04',
+      method: 'ocr',
+    })],
+  })
+  const issue = {
+    issue_id: 'issue-expired-employment-letter',
+    code: 'EMPLOYMENT_LETTER_EXPIRED',
+    message: expiredEmploymentMessage,
+    affected_document_ids: [staleDocument.id],
+    affected_field_ids: ['HH-005-D04:document_date'],
+    rule_ids: ['CH-READINESS-001'],
+    action: { type: 'replace_document' as const, document_id: staleDocument.id, label: 'Replace document' },
+  }
+  session.documents = [session.documents[0], staleDocument]
+  session.analysis = {
+    ...session.analysis!,
+    annualized_income: 45968,
+    threshold: 111120,
+    arithmetic_difference: 65152,
+    readiness_status: 'NEEDS_REVIEW',
+    review_issues: [issue],
+    review_reasons: [issue.code],
+    decision_boundary: 'Human review is required. No program determination was made.',
+  }
+  session.packet = {
+    included_document_ids: ['document-paystub', staleDocument.id],
+    renter_note: '',
+    packet_complete: true,
+    excluded_active_document_ids: [],
+  }
+
+  if (phase === 'issue') return session
+
+  const pendingDocument = makeDocument({
+    id: 'replacement-employment-letter',
+    file_name: 'hh-005_fresh_employment_letter.pdf',
+    document_type: 'employment_letter',
+    rasterized: false,
+    contains_untrusted_instruction: false,
+    status: phase === 'pending' ? 'pending_replacement' : 'active',
+    replaces_document_id: staleDocument.id,
+    fields: [makeField({
+      id: 'replacement-employment-letter:document_date',
+      name: 'document_date',
+      label: 'Document date',
+      value_type: 'date',
+      extracted_value: '2026-07-12',
+      confirmed_value: phase === 'ready' ? '2026-07-12' : null,
+      confirmed: phase === 'ready',
+      document_id: 'replacement-employment-letter',
+      method: 'text_layer',
+    })],
+  })
+  session.documents.push(pendingDocument)
+
+  if (phase === 'ready') {
+    staleDocument.status = 'superseded'
+    staleDocument.superseded_by_document_id = pendingDocument.id
+    staleDocument.superseded_at = '2026-07-19T10:00:00Z'
+    session.analysis = {
+      ...session.analysis,
+      readiness_status: 'READY_TO_REVIEW',
+      review_issues: [],
+      review_reasons: [],
+      decision_boundary: 'Ready for human review. No program determination was made.',
+    }
+    session.packet.included_document_ids = ['document-paystub', pendingDocument.id]
+    session.replacement_events = [{
+      old_document_id: staleDocument.id,
+      new_document_id: pendingDocument.id,
+      timestamp: '2026-07-19T10:00:00Z',
+      resolved_issue_ids: [issue.issue_id],
+      resolved_issues: [issue],
+    }]
+    session.analysis.rule_citations.push({
+      rule_id: 'CH-READINESS-001',
+      source_locator: 'Frozen document-freshness convention',
+      effective_date: '2026-01-01',
+      source_url: 'https://example.com/rules/ch-readiness',
+    })
+  }
+
+  return session
 }
 
 function jsonResponse(value: unknown, status = 200) {
@@ -112,7 +232,13 @@ function jsonResponse(value: unknown, status = 200) {
   })
 }
 
-function installMockApi(initialSession = makeSession(false)) {
+function installMockApi(
+  initialSession = makeSession(false),
+  options: {
+    stageReplacement?: () => Promise<SessionState>
+    replacementError?: string
+  } = {},
+) {
   let session = structuredClone(initialSession)
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input)
@@ -132,6 +258,17 @@ function installMockApi(initialSession = makeSession(false)) {
     if (url.endsWith('/api/sessions') && method === 'POST') return jsonResponse(session)
     if (url.includes('/packet.zip')) return new Response(new Blob(['packet']), { status: 200, headers: { 'Content-Type': 'application/zip' } })
     if (url.includes('/documents/') && url.includes('/page/')) return new Response(new Blob(['page']), { status: 200, headers: { 'Content-Type': 'image/png' } })
+    if (url.endsWith('/confirm-replacement') && method === 'POST') {
+      session = makeReplacementSession('ready')
+      return jsonResponse(session)
+    }
+    if (url.endsWith('/replacement') && method === 'POST') {
+      if (options.replacementError) return jsonResponse({ detail: options.replacementError }, 422)
+      session = options.stageReplacement
+        ? await options.stageReplacement()
+        : makeReplacementSession('pending')
+      return jsonResponse(session)
+    }
     if (url.endsWith('/confirm') && method === 'POST') {
       const currentMonthly = Number(session.documents[0].fields[0].confirmed_value ?? session.documents[0].fields[0].extracted_value)
       session = makeSession(true, currentMonthly)
@@ -287,6 +424,197 @@ describe('RealDoor Evidence Desk', () => {
         body: JSON.stringify({ included_document_ids: ['document-paystub'], renter_note: 'Use this note.' }),
       }),
     ))
+  })
+
+  it('renders the backend issue message and links only its affected field to source', async () => {
+    const user = userEvent.setup()
+    await loadDemo(user, makeReplacementSession('issue'))
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+
+    expect(await screen.findByText(expiredEmploymentMessage)).toBeInTheDocument()
+    expect(screen.getByText('2026-04-14')).toBeInTheDocument()
+    const sourceButton = screen.getByRole('button', {
+      name: 'View source for Document date in hh-005_d04_employment_letter.pdf, issue EMPLOYMENT_LETTER_EXPIRED',
+    })
+    await user.click(sourceButton)
+    expect(await screen.findByRole('dialog', { name: 'Document date' })).toBeInTheDocument()
+  })
+
+  it('does not infer issue fields from issue codes or frontend field names', async () => {
+    const user = userEvent.setup()
+    const session = makeReplacementSession('issue')
+    session.analysis!.review_issues[0].affected_field_ids = []
+    await loadDemo(user, session)
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+
+    await screen.findByText(expiredEmploymentMessage)
+    expect(screen.queryByRole('button', { name: /View source/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('2026-04-14')).not.toBeInTheDocument()
+  })
+
+  it('restores replacement picker focus when the native picker is cancelled', async () => {
+    const user = userEvent.setup()
+    await loadDemo(user, makeReplacementSession('issue'))
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+    const trigger = await screen.findByRole('button', { name: 'Replace document' })
+    const input = screen.getByLabelText('Choose a replacement PDF for hh-005_d04_employment_letter.pdf')
+
+    await user.click(trigger)
+    input.focus()
+    fireEvent(input, new Event('cancel', { bubbles: true }))
+
+    expect(trigger).toHaveFocus()
+    expect(input).not.toHaveAttribute('multiple')
+    expect(input).toHaveAttribute('accept', 'application/pdf,.pdf')
+  })
+
+  it('announces replacement phases, focuses the staged document, and does not confirm it', async () => {
+    const user = userEvent.setup()
+    let releaseStage!: (session: SessionState) => void
+    const stageResult = new Promise<SessionState>((resolve) => {
+      releaseStage = resolve
+    })
+    const api = installMockApi(makeReplacementSession('issue'), {
+      stageReplacement: () => stageResult,
+    })
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /HH-001/ }))
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+    const input = screen.getByLabelText('Choose a replacement PDF for hh-005_d04_employment_letter.pdf')
+    const file = new File(['%PDF replacement'], 'hh-005_fresh_employment_letter.pdf', { type: 'application/pdf' })
+
+    fireEvent.change(input, { target: { files: [file] } })
+    expect(screen.getAllByText('Uploading replacement').length).toBeGreaterThan(0)
+    expect(document.querySelector('.busy-marker')).toBeVisible()
+    expect(document.querySelector('.busy-marker')).not.toHaveAttribute('aria-live')
+    expect(document.querySelector('.sr-only[role="status"]')).toHaveAttribute('aria-live', 'polite')
+    await waitFor(() => expect(screen.getAllByText('Extracting and validating replacement evidence').length).toBeGreaterThan(0))
+    const stageCall = api.fetchMock.mock.calls.find(([url]) => String(url).endsWith('/documents/HH-005-D04/replacement'))
+    expect(stageCall).toBeDefined()
+    const stageBody = stageCall?.[1]?.body
+    expect(stageBody).toBeInstanceOf(FormData)
+    expect((stageBody as FormData).get('file')).toBe(file)
+    releaseStage(makeReplacementSession('pending'))
+
+    const pendingHeading = await screen.findByRole('heading', { name: 'hh-005_fresh_employment_letter.pdf' })
+    await waitFor(() => expect(pendingHeading).toHaveFocus())
+    expect(screen.getByText('Replacement awaiting renter confirmation.')).toBeInTheDocument()
+    const pendingSection = pendingHeading.closest('section')!
+    const pendingSource = within(pendingSection).getByRole('button', { name: /See source for Document date/ })
+    await user.click(pendingSource)
+    expect(await screen.findByRole('dialog', { name: 'Document date' })).toHaveTextContent(
+      'Retained only in session provenance and excluded from the current packet.',
+    )
+    await user.keyboard('{Escape}')
+    expect(pendingSource).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Confirm replacement evidence' })).toBeInTheDocument()
+    expect(api.fetchMock.mock.calls.some(([url]) => String(url).endsWith('/confirm-replacement'))).toBe(false)
+  })
+
+  it('keeps a staging error visible and restores focus to Replace document', async () => {
+    const user = userEvent.setup()
+    await loadDemo(user, makeReplacementSession('issue'))
+    installMockApi(makeReplacementSession('issue'), { replacementError: 'Replacement document has the wrong document type' })
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+    const trigger = screen.getByRole('button', { name: 'Replace document' })
+    const input = screen.getByLabelText('Choose a replacement PDF for hh-005_d04_employment_letter.pdf')
+
+    fireEvent.change(input, {
+      target: { files: [new File(['%PDF wrong'], 'wrong.pdf', { type: 'application/pdf' })] },
+    })
+    input.focus()
+
+    expect(await screen.findByText('Replacement document has the wrong document type')).toBeVisible()
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('announces incomplete and complete packet transitions before choices are saved', async () => {
+    const user = userEvent.setup()
+    const session = makeReplacementSession('issue')
+    await loadDemo(user, session)
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+
+    const packetStatus = screen.getByRole('status', { name: 'Packet completeness' })
+    expect(packetStatus).toHaveTextContent('Complete packet. All active documents are selected. submission.json will be included.')
+
+    await user.click(screen.getByRole('checkbox', { name: /hh-005_d04_employment_letter\.pdf/ }))
+    const warning = screen.getByRole('status', { name: 'Packet completeness' })
+    expect(warning).toBeVisible()
+    expect(warning).toHaveTextContent('Incomplete packet')
+    expect(warning).toHaveTextContent('hh-005_d04_employment_letter.pdf')
+    expect(warning).toHaveTextContent('No submission.json will be included. Canonical readiness remains unchanged.')
+    expect(screen.getByText('NEEDS_REVIEW')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: /hh-005_d04_employment_letter\.pdf/ }))
+    expect(screen.getByRole('status', { name: 'Packet completeness' })).toHaveTextContent(
+      'Complete packet. All active documents are selected. submission.json will be included.',
+    )
+  })
+
+  it('keeps lifecycle provenance truthful and resolved rule metadata linked to the stale field', async () => {
+    const user = userEvent.setup()
+    await loadDemo(user, makeReplacementSession('ready'))
+
+    const activeSource = screen.getByRole('button', { name: /See source for Monthly wages/ })
+    await user.click(activeSource)
+    expect(await screen.findByRole('dialog', { name: 'Monthly wages' })).toHaveTextContent(
+      'Can be available as a source reference in packet review when the document is included.',
+    )
+    await user.keyboard('{Escape}')
+
+    const staleSection = screen.getByRole('heading', { name: 'hh-005_d04_employment_letter.pdf' }).closest('section')!
+    await user.click(within(staleSection).getByRole('button', { name: /See source for Document date/ }))
+    const staleDrawer = await screen.findByRole('dialog', { name: 'Document date' })
+    expect(staleDrawer).toHaveTextContent('Retained only in session provenance and excluded from the current packet.')
+    expect(within(staleDrawer).getByText('Rule version').nextElementSibling).toHaveTextContent('CH-READINESS-001')
+
+    await user.keyboard('{Escape}')
+  })
+
+  it('confirms pending evidence explicitly, focuses readiness, and preserves lifecycle provenance', async () => {
+    const user = userEvent.setup()
+    const api = await loadDemo(user, makeReplacementSession('pending'))
+    const pendingLabel = screen.getByText('Pending replacement')
+    expect(pendingLabel.querySelector('svg')).toBeInTheDocument()
+    expect(screen.getByText('Replacement awaiting renter confirmation.')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Confirm replacement evidence' }))
+
+    const readiness = await screen.findByLabelText('Readiness result: READY_TO_REVIEW')
+    await waitFor(() => expect(readiness).toHaveFocus())
+    expect(screen.getByText('$45,968')).toBeInTheDocument()
+    expect(screen.getByText('$111,120')).toBeInTheDocument()
+    expect(screen.getByText('No active review issues.')).toBeInTheDocument()
+    expect(screen.getByText('Ready for human review. No program determination was made.')).toBeInTheDocument()
+    expect(api.fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/confirm-replacement') && init?.method === 'POST')).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Profile' }))
+    const oldHeading = await screen.findByRole('heading', { name: 'hh-005_d04_employment_letter.pdf' })
+    const oldSection = oldHeading.closest('section')!
+    const newHeading = screen.getByRole('heading', { name: 'hh-005_fresh_employment_letter.pdf' })
+    const newSection = newHeading.closest('section')!
+    const supersededLabel = within(oldSection).getByText('Superseded')
+    const activeLabel = within(newSection).getByText('Active')
+    expect(supersededLabel.querySelector('svg')).toBeInTheDocument()
+    expect(activeLabel.querySelector('svg')).toBeInTheDocument()
+    expect(within(oldSection).getByRole('button', { name: /See source for Document date/ })).toBeInTheDocument()
+    expect(within(oldSection).queryByRole('button', { name: /Correct Document date/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm replacement evidence' })).not.toBeInTheDocument()
+  })
+
+  it('passes axe checks with a replacement issue and a pending replacement', async () => {
+    const user = userEvent.setup()
+    installMockApi(makeReplacementSession('issue'))
+    render(<App />)
+    await user.click(await screen.findByRole('button', { name: /HH-001/ }))
+    await user.click(screen.getByRole('button', { name: 'Prepare' }))
+    await screen.findByText(expiredEmploymentMessage)
+    expect((await axe.run(document.body)).violations).toEqual([])
+
+    const input = screen.getByLabelText('Choose a replacement PDF for hh-005_d04_employment_letter.pdf')
+    await user.upload(input, new File(['%PDF replacement'], 'hh-005_fresh_employment_letter.pdf', { type: 'application/pdf' }))
+    await screen.findByText('Replacement awaiting renter confirmation.')
+    expect((await axe.run(document.body)).violations).toEqual([])
   })
 
   it('passes an axe check on welcome, profile, understand, and prepare', async () => {

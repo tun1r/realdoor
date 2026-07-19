@@ -11,19 +11,6 @@ import { AppStateProvider } from './state/AppState'
 import { useAppState } from './state/useAppState'
 import type { Field } from './types'
 
-const incomeFields = new Set([
-  'pay_frequency', 'regular_hours', 'hourly_rate', 'gross_pay', 'weekly_hours',
-  'monthly_benefit', 'benefit_frequency', 'gross_receipts', 'statement_month',
-])
-
-function ruleIdForField(field: Field | null) {
-  if (!field) return null
-  if (field.name === 'household_size') return 'HUD-MTSP-002'
-  if (incomeFields.has(field.name)) return 'CH-INCOME-001'
-  if (field.value_type === 'date' || field.value_type === 'month') return 'CH-READINESS-001'
-  return null
-}
-
 function AppContent({ client }: { client: ApiClient }) {
   const { view, session, config } = useAppState()
   const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null)
@@ -44,7 +31,13 @@ function AppContent({ client }: { client: ApiClient }) {
   const selectedField = session && selectedFieldId
     ? session.documents.flatMap((document) => document.fields).find((field) => field.id === selectedFieldId) ?? null
     : null
-  const ruleId = ruleIdForField(selectedField)
+  const linkedIssue = selectedField
+    ? session?.analysis?.review_issues.find((issue) => issue.affected_field_ids.includes(selectedField.id))
+      ?? session?.replacement_events
+        .flatMap((event) => event.resolved_issues)
+        .find((issue) => issue.affected_field_ids.includes(selectedField.id))
+    : null
+  const ruleId = linkedIssue?.rule_ids[0] ?? null
   const citations = session?.analysis?.rule_citations ?? config?.rule_citations ?? []
   const citation = ruleId ? citations.find((item) => item.rule_id === ruleId) ?? null : null
 

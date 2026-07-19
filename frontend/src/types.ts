@@ -52,6 +52,26 @@ export interface DocumentRecord {
   rasterized: boolean
   contains_untrusted_instruction: boolean
   fields: Field[]
+  status: 'active' | 'pending_replacement' | 'superseded'
+  replaces_document_id: string | null
+  superseded_by_document_id: string | null
+  superseded_at: string | null
+}
+
+export interface ReviewAction {
+  type: 'add_document' | 'correct_field' | 'review_document' | 'replace_document'
+  document_id: string | null
+  label: string
+}
+
+export interface ReviewIssue {
+  issue_id: string
+  code: string
+  message: string
+  affected_document_ids: string[]
+  affected_field_ids: string[]
+  rule_ids: string[]
+  action: ReviewAction
 }
 
 export interface IncomeSource {
@@ -100,6 +120,7 @@ export interface Analysis {
   comparison: string | null
   arithmetic_difference: number | null
   readiness_status: 'READY_TO_REVIEW' | 'NEEDS_REVIEW' | string
+  review_issues: ReviewIssue[]
   review_reasons: string[]
   income_sources: IncomeSource[]
   rule_citations: RuleCitation[]
@@ -112,9 +133,20 @@ export interface Analysis {
 export interface PacketState {
   included_document_ids: string[]
   renter_note: string | null
+  packet_complete: boolean
+  excluded_active_document_ids: string[]
+}
+
+export interface ReplacementEvent {
+  old_document_id: string
+  new_document_id: string
+  timestamp: string
+  resolved_issue_ids: string[]
+  resolved_issues: ReviewIssue[]
 }
 
 export interface SessionState {
+  schema_version: 2
   id: string
   created_at: string
   updated_at: string
@@ -123,6 +155,7 @@ export interface SessionState {
   analysis: Analysis | null
   packet: PacketState
   all_fields_confirmed: boolean
+  replacement_events: ReplacementEvent[]
 }
 
 export interface AppConfig {
@@ -157,10 +190,18 @@ export type BusyKind =
   | 'creating'
   | 'loading-demo'
   | 'uploading'
+  | 'replacement-uploading'
+  | 'replacement-extracting'
   | 'confirming'
+  | 'confirming-replacement'
   | 'correcting'
   | 'question'
   | 'packet'
   | 'exporting'
   | 'deleting'
   | null
+
+export type FocusIntent =
+  | { type: 'pending-replacement'; documentId: string }
+  | { type: 'readiness-result' }
+  | { type: 'replacement-trigger'; trigger: HTMLButtonElement }
