@@ -48,7 +48,7 @@ class Settings:
             session_dir=_resolve_path(os.getenv("REALDOOR_SESSION_DIR"), DEFAULT_SESSION_DIR),
             allowed_origins=allowed_origins,
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
-            openai_vision_model=os.getenv("OPENAI_VISION_MODEL", "gpt-4.1-mini"),
+            openai_vision_model=os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna"),
             hosted_vision_enabled=os.getenv("REALDOOR_ENABLE_HOSTED_VISION", "false").lower() == "true",
             ocr_dpi=int(os.getenv("REALDOOR_OCR_DPI", "200")),
         )

@@ -1,9 +1,14 @@
+import io
+import os
 import sys
 from dataclasses import replace
 from types import SimpleNamespace
 
+import fitz
 import pytest
+from PIL import Image, ImageDraw, ImageFont
 
+from realdoor.config import Settings
 from realdoor.coordinates import BBOX_UNITS, pdf_bottom_left_to_pymupdf, validate_bbox
 from realdoor.extraction import _normalize_vision_value, _vision_extract, extract_document
 
@@ -56,10 +61,16 @@ def test_hosted_vision_requires_explicit_enablement(settings, monkeypatch):
 
 
 def test_hosted_vision_is_deterministic_and_values_are_schema_checked(settings, monkeypatch):
+    request = {}
     response = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content='{"gross_pay": 960, "pay_date": "not-a-date"}'))]
     )
-    completions = SimpleNamespace(create=lambda **_: response)
+
+    def create(**kwargs):
+        request.update(kwargs)
+        return response
+
+    completions = SimpleNamespace(create=create)
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=lambda **_: fake_client))
     enabled = replace(settings, openai_api_key="test-key", hosted_vision_enabled=True)
@@ -69,3 +80,43 @@ def test_hosted_vision_is_deterministic_and_values_are_schema_checked(settings, 
     assert _normalize_vision_value("gross_pay", values["gross_pay"]) == 960.0
     assert _normalize_vision_value("pay_date", values["pay_date"]) is None
     assert _normalize_vision_value("gross_pay", {"amount": 960}) is None
+    assert "temperature" not in request
+    schema = request["response_format"]["json_schema"]
+    assert schema["strict"] is True
+    assert schema["schema"]["required"] == ["gross_pay", "pay_date"]
+    assert schema["schema"]["additionalProperties"] is False
+    assert schema["schema"]["properties"]["gross_pay"] == {"type": ["number", "null"], "minimum": 0}
+
+
+@pytest.mark.skipif(os.getenv("REALDOOR_RUN_OPENAI_LIVE") != "true", reason="live OpenAI test is opt-in")
+def test_live_openai_fallback_extracts_schema_checked_fields():
+    settings = Settings.from_env()
+    assert settings.hosted_vision_enabled is True
+    assert settings.openai_api_key
+
+    image = Image.new("RGB", (1200, 700), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default(size=48)
+    draw.text((70, 60), "SYNTHETIC PAY RECORD", fill="black", font=font)
+    draw.text((70, 180), "Worker: Luna Provider Test", fill="black", font=font)
+    draw.text((70, 300), "Paid on: 2026-07-15", fill="black", font=font)
+    draw.text((70, 420), "Pre-deduction earnings this cycle: $987.65", fill="black", font=font)
+    draw.text((70, 540), "Cadence: every two weeks", fill="black", font=font)
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format="PNG")
+
+    pdf = fitz.open()
+    page = pdf.new_page(width=612, height=792)
+    page.insert_image(page.rect, stream=image_bytes.getvalue())
+    pdf_bytes = pdf.tobytes()
+    pdf.close()
+
+    result = extract_document(pdf_bytes, "live_pay_stub.pdf", settings, document_id="live-provider-test")
+    fields = {field.name: field for field in result.document.fields}
+
+    assert fields["person_name"].extracted_value == "Luna Provider Test"
+    assert fields["pay_date"].extracted_value == "2026-07-15"
+    assert fields["gross_pay"].extracted_value == 987.65
+    assert fields["pay_frequency"].extracted_value == "biweekly"
+    assert all(fields[name].method == "vision" for name in ("person_name", "pay_date", "gross_pay", "pay_frequency"))
+    assert all(fields[name].bbox is None for name in ("person_name", "pay_date", "gross_pay", "pay_frequency"))

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -21,6 +22,9 @@ import fitz
 from .config import Settings
 from .coordinates import BBOX_UNITS, pymupdf_to_pdf_bottom_left, validate_bbox
 from .models import DocumentRecord, FieldRecord
+
+
+logger = logging.getLogger(__name__)
 
 
 ALLOWED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -323,10 +327,35 @@ def _vision_extract(
 
         client = OpenAI(api_key=settings.openai_api_key)
         encoded = base64.b64encode(image).decode("ascii")
+        properties: dict[str, dict[str, Any]] = {}
+        for name in missing_fields:
+            value_type = FIELD_TYPES[name]
+            if value_type == "integer":
+                properties[name] = {"type": ["integer", "null"], "minimum": 1}
+            elif value_type == "number":
+                properties[name] = {"type": ["number", "null"], "minimum": 0}
+            elif value_type == "frequency":
+                properties[name] = {
+                    "type": ["string", "null"],
+                    "enum": ["weekly", "biweekly", "semimonthly", "monthly", "annual", None],
+                }
+            else:
+                properties[name] = {"type": ["string", "null"]}
         response = client.chat.completions.create(
             model=settings.openai_vision_model,
-            temperature=0,
-            response_format={"type": "json_object"},
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "realdoor_document_fields",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": missing_fields,
+                        "additionalProperties": False,
+                    },
+                },
+            },
             messages=[
                 {
                     "role": "system",
@@ -354,9 +383,10 @@ def _vision_extract(
         content = response.choices[0].message.content or "{}"
         parsed = json.loads(content)
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
         # Provider failure never prevents deterministic local processing or
         # turns an un-cited vision value into a calculation.
+        logger.warning("Hosted vision request failed (%s)", type(exc).__name__)
         return {}
 
 

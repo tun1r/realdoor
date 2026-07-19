@@ -26,4 +26,14 @@ npm --prefix frontend run test:e2e
 git diff --check
 ```
 
+Run the opt-in provider test only with a local, ignored `.env` containing the key and explicit hosted-vision switch:
+
+```bash
+set -a && source .env && set +a
+REALDOOR_RUN_OPENAI_LIVE=true .venv/bin/pytest \
+  backend/tests/test_coordinates_and_extraction.py::test_live_openai_fallback_extracts_schema_checked_fields -q
+```
+
+The live test uses a generated synthetic document, requires `OPENAI_API_KEY`, and verifies that hosted values remain uncited until local extraction supplies a source box. Never run it in public CI or commit `.env`.
+
 The organizer starter pack is intentionally external because its included redistribution license is marked draft. Pack-backed tests run when `REALDOOR_PACK_PATH` points to the supplied local copy.
