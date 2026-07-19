@@ -74,11 +74,12 @@ def build_pdf(
     document_date: str = "2026-07-12",
     weekly_hours: int = 34,
     hourly_rate: float = 26.0,
+    title: str = "Employment Letter HH-005 replacement",
 ) -> bytes:
     pdf, page = _document()
     text = (0, 0, 0)
     page.insert_text((40, 52), source_name, fontsize=18, fontname="helv", color=text)
-    page.insert_text((40, 78), "Employment Letter HH-005 replacement", fontsize=13, fontname="helv", color=text)
+    page.insert_text((40, 78), title, fontsize=13, fontname="helv", color=text)
     page.insert_text((40, 120), "SYNTHETIC - NOT A REAL DOCUMENT", fontsize=9, fontname="helv", color=text)
     page.insert_text((40, 160), "EMPLOYEE", fontsize=9, fontname="helv", color=text)
     page.insert_text((40, 178), person_name, fontsize=12, fontname="helv", color=text)

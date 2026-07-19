@@ -11,9 +11,13 @@ import '@fontsource/ibm-plex-mono/latin-500.css'
 import './index.css'
 import './App.css'
 import App from './App.tsx'
+import { TechVideo } from './TechVideo.tsx'
+import './tech-video.css'
+
+const isTechVideo = window.location.pathname === '/tech-video'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {isTechVideo ? <TechVideo /> : <App />}
   </StrictMode>,
 )

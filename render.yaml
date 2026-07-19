@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: realdoor-hacknation
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: REALDOOR_ENABLE_HOSTED_VISION
+        value: "false"
+      - key: REALDOOR_PACK_PATH
+        value: /app/backend/realdoor/demo_pack
+      - key: REALDOOR_SESSION_DIR
+        value: /tmp/realdoor-sessions
+      - key: REALDOOR_FRONTEND_DIST
+        value: /app/frontend/dist

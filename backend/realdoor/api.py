@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from .config import PROJECT_ROOT
 from .models import ConfirmRequest, CorrectionRequest, ErrorResponse, PacketRequest, QuestionRequest, SessionState
 from .service import RealDoorService, ServiceError
 
@@ -159,3 +164,19 @@ def document_page(session_id: str, document_id: str, page_number: int) -> Respon
 @app.delete("/api/sessions/{session_id}")
 def delete_session(session_id: str) -> dict[str, object]:
     return service.delete_session(session_id)
+
+
+frontend_dist = Path(os.getenv("REALDOOR_FRONTEND_DIST", PROJECT_ROOT / "frontend" / "dist")).resolve()
+if frontend_dist.is_dir():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def frontend(path: str) -> Response:
+        if path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        candidate = (frontend_dist / path).resolve()
+        if candidate.is_file() and frontend_dist in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(frontend_dist / "index.html")

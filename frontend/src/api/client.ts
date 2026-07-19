@@ -5,7 +5,7 @@ import type {
   SessionState,
 } from '../types'
 
-const defaultBaseUrl = 'http://localhost:8000'
+const defaultBaseUrl = import.meta.env.PROD ? window.location.origin : 'http://localhost:8000'
 
 export class ApiError extends Error {
   status: number

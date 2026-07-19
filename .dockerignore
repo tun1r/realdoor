@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+.venv
+**/__pycache__
+**/.pytest_cache
+backend/.sessions
+frontend/dist
+frontend/node_modules
+frontend/playwright-report
+frontend/test-results
+RealDoor_Hackathon_Starter_Pack_v1
+.gstack
+*.log
