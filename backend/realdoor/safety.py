@@ -186,6 +186,48 @@ def route_question(question: str, context: dict[str, Any] | None = None) -> dict
     if any(term in q for term in ("eligible", "eligibility", "ineligible", "qualify", "qualified", "qualification", "approved", "approval", "denied", "denial", "prioritized", "priority")):
         return _answer(DECISION_BOUNDARY, ["CH-DECISION-001"], refusal=True)
 
+    if "annualized" in q and "income" in q and ("included" in q or "figure" in q):
+        sources = analysis.get("income_sources")
+        source_types: list[str] = []
+        if isinstance(sources, list):
+            for source in sources:
+                if not isinstance(source, dict):
+                    continue
+                source_type = source.get("source_type")
+                if isinstance(source_type, str):
+                    label = source_type.replace("_", " ")
+                    if label not in source_types:
+                        source_types.append(label)
+        income = analysis.get("annualized_income")
+        if source_types and isinstance(income, (int, float)) and not isinstance(income, bool):
+            return _answer(
+                f"The annualized figure includes confirmed recurring {', '.join(source_types)} income totaling {_money(income)} under the explicit source frequencies.",
+                ["CH-INCOME-001"],
+            )
+        return _answer(
+            "The annualized figure includes only confirmed recurring income sources with an explicit frequency and traceable document evidence.",
+            ["CH-INCOME-001"],
+            limitation=True,
+        )
+
+    if "arithmetic" in q and any(term in q for term in ("calculated", "calculate", "formula")):
+        return _answer(
+            "RealDoor annualizes each confirmed recurring gross-income source once using its explicit frequency, sums independent sources, and compares the total with the frozen FY 2026 60% threshold for the confirmed household size. Missing, stale, conflicting, or uncited evidence keeps readiness at NEEDS_REVIEW.",
+            ["CH-INCOME-001", "HUD-MTSP-002", "CH-READINESS-001"],
+        )
+
+    if "date" in q and ("anchor" in q or "reference" in q) and ("fy 2026" in q or "2026" in q):
+        return _answer(
+            "The FY 2026 MTSP limits took effect May 1, 2026. The challenge's 60-day evidence window is anchored separately to July 18, 2026.",
+            ["HUD-MTSP-001", "CH-READINESS-001"],
+        )
+
+    if "challenge" in q and ("source" in q or "value" in q):
+        return _answer(
+            "You can challenge an extracted value, its page or source box, the document date and freshness, a conflict between fields, or the arithmetic. Correct the value in Profile and keep the cited page available for human review.",
+            ["CH-READINESS-001", "CH-SAFETY-001"],
+        )
+
     if "take effect" in q or "effective" in q or "may 1, 2026" in q:
         return _answer("May 1, 2026.", ["HUD-MTSP-001"])
 

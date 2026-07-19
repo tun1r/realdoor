@@ -48,3 +48,35 @@ def test_qualification_question_routes_to_human_decision_boundary():
     assert result["refusal"] is True
     assert "a human makes any program determination" in result["answer"]
     assert result["rule_ids"] == ["CH-DECISION-001"]
+
+
+def test_understand_quick_prompts_return_specific_cited_answers():
+    context = {
+        "analysis": {
+            "annualized_income": 56316.0,
+            "income_sources": [
+                {
+                    "source_type": "wage",
+                    "annualized_amount": 56316.0,
+                }
+            ],
+        }
+    }
+
+    income = route_question("What income is included in the annualized figure?", context)
+    arithmetic = route_question("How is the arithmetic calculated?", context)
+    reference_date = route_question("What date anchors the FY 2026 reference?", context)
+    challenge = route_question("What can I challenge about a source?", context)
+
+    assert "wage" in income["answer"].lower()
+    assert "$56,316.00" in income["answer"]
+    assert income["rule_ids"] == ["CH-INCOME-001"]
+    assert "annualizes" in arithmetic["answer"].lower()
+    assert "compares" in arithmetic["answer"].lower()
+    assert arithmetic["rule_ids"] == ["CH-INCOME-001", "HUD-MTSP-002", "CH-READINESS-001"]
+    assert "May 1, 2026" in reference_date["answer"]
+    assert "July 18, 2026" in reference_date["answer"]
+    assert reference_date["rule_ids"] == ["HUD-MTSP-001", "CH-READINESS-001"]
+    assert "extracted value" in challenge["answer"].lower()
+    assert "source box" in challenge["answer"].lower()
+    assert challenge["rule_ids"] == ["CH-READINESS-001", "CH-SAFETY-001"]
