@@ -28,6 +28,10 @@ from scripts.generate_hh005_fresh_employment_letter import (
 FIXTURE = Path(__file__).parent / "fixtures" / "hh-005_fresh_employment_letter.pdf"
 
 
+def test_hh005_replacement_fixture_is_byte_stable():
+    assert build_pdf() == build_pdf() == FIXTURE.read_bytes()
+
+
 def _confirmed_hh005(service):
     state = service.create_session()
     service._add_document(

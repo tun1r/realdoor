@@ -14,7 +14,7 @@ def _document() -> tuple[fitz.Document, fitz.Page]:
 
 
 def _finish(pdf: fitz.Document) -> bytes:
-    result = pdf.tobytes()
+    result = pdf.tobytes(no_new_id=True)
     pdf.close()
     return result
 
